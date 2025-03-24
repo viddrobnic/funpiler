@@ -1,12 +1,15 @@
-use std::fmt::Debug;
+#[cfg(test)]
+mod tests;
+
+mod ast;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Result<'a, T> {
-    pub source: &'a str,
-    pub value: T,
+struct Result<'a, T> {
+    source: &'a str,
+    value: T,
 }
 
-pub trait Parser<'a> {
+trait Parser<'a> {
     type Output;
 
     fn parse(&self, source: &'a str) -> Option<Result<'a, Self::Output>>;
@@ -72,10 +75,10 @@ where
     }
 }
 
-pub struct Constant<T: Clone>(T);
+struct Constant<T: Clone>(T);
 
 impl<T: Clone> Constant<T> {
-    pub fn new(value: T) -> Self {
+    fn new(value: T) -> Self {
         Constant(value)
     }
 }
@@ -94,7 +97,7 @@ where
     }
 }
 
-pub struct Choice<P1, P2>(P1, P2);
+struct Choice<P1, P2>(P1, P2);
 
 impl<'a, T, P1, P2> Parser<'a> for Choice<P1, P2>
 where
@@ -113,13 +116,13 @@ where
     }
 }
 
-pub struct ZeroOrMore<P>(P);
+struct ZeroOrMore<P>(P);
 
 impl<'a, P> ZeroOrMore<P>
 where
     P: Parser<'a>,
 {
-    pub fn new(parser: P) -> Self {
+    fn new(parser: P) -> Self {
         ZeroOrMore(parser)
     }
 }
@@ -146,7 +149,7 @@ where
     }
 }
 
-pub struct Bind<P, F> {
+struct Bind<P, F> {
     parser: P,
     function: F,
 }
@@ -166,7 +169,7 @@ where
     }
 }
 
-pub struct And<P1, P2>(P1, P2);
+struct And<P1, P2>(P1, P2);
 
 impl<'a, T, U, P1, P2> Parser<'a> for And<P1, P2>
 where
@@ -181,13 +184,13 @@ where
     }
 }
 
-pub struct Maybe<P>(P);
+struct Maybe<P>(P);
 
 impl<'a, P> Maybe<P>
 where
     P: Parser<'a>,
 {
-    pub fn new(parser: P) -> Self {
+    fn new(parser: P) -> Self {
         Maybe(parser)
     }
 }
@@ -214,7 +217,7 @@ where
     }
 }
 
-pub fn whitespace(source: &'_ str) -> Option<Result<'_, ()>> {
+fn whitespace(source: &'_ str) -> Option<Result<'_, ()>> {
     if source.is_empty() {
         return None;
     }
@@ -281,159 +284,195 @@ fn comments(source: &'_ str) -> Option<Result<'_, ()>> {
     single_line_comment.or(multi_line_comment).parse(source)
 }
 
-pub fn ignored(source: &'_ str) -> Option<Result<'_, ()>> {
+fn ignored(source: &'_ str) -> Option<Result<'_, ()>> {
     ZeroOrMore::new(whitespace.or(comments))
         .map(|_| ())
         .parse(source)
-    // whitespace.or(comments).parse(source)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+struct TokenBase<'a> {
+    token: &'a str,
+    whitespace_end: bool,
+}
 
-    #[test]
-    fn whitespace_empty() {
-        assert_eq!(whitespace.parse(""), None)
+impl<'a> TokenBase<'a> {
+    fn new(token: &'a str, whitespace_end: bool) -> Self {
+        Self {
+            token,
+            whitespace_end,
+        }
     }
+}
 
-    #[test]
-    fn whitespace_single_space() {
-        assert_eq!(
-            whitespace.parse(" "),
-            Some(Result {
+impl<'a> Parser<'a> for TokenBase<'a> {
+    type Output = &'a str;
+
+    fn parse(&self, source: &'a str) -> Option<Result<'a, Self::Output>> {
+        if !source.starts_with(self.token) {
+            return None;
+        }
+
+        if !self.whitespace_end {
+            return Some(Result {
+                source: &source[self.token.len()..],
+                value: self.token,
+            });
+        }
+
+        let Some((idx, ch)) = source[self.token.len()..].char_indices().next() else {
+            return Some(Result {
                 source: "",
-                value: ()
-            })
-        );
-    }
+                value: self.token,
+            });
+        };
 
-    #[test]
-    fn whitespace_multiple_spaces() {
-        assert_eq!(
-            whitespace.parse("   \t\n\t  \n"),
+        if ch.is_whitespace() {
             Some(Result {
-                source: "",
-                value: ()
+                source: &source[(idx + ch.len_utf8())..],
+                value: self.token,
             })
-        );
+        } else {
+            None
+        }
+    }
+}
+
+fn token(token: &str, whitespace_end: bool) -> impl Parser<'_, Output = &'_ str> {
+    TokenBase::new(token, whitespace_end).bind(|tk| ignored.and(Constant::new(tk)))
+}
+
+fn function_t(source: &str) -> Option<Result<'_, &str>> {
+    token("function", true).parse(source)
+}
+
+fn if_t(source: &str) -> Option<Result<'_, &str>> {
+    token("if", true).parse(source)
+}
+
+fn else_t(source: &str) -> Option<Result<'_, &str>> {
+    token("else", true).parse(source)
+}
+
+fn return_t(source: &str) -> Option<Result<'_, &str>> {
+    token("return", true).parse(source)
+}
+
+fn var_t(source: &str) -> Option<Result<'_, &str>> {
+    token("var", true).parse(source)
+}
+
+fn while_t(source: &str) -> Option<Result<'_, &str>> {
+    token("while", true).parse(source)
+}
+
+fn comma_t(source: &str) -> Option<Result<'_, &str>> {
+    token(",", false).parse(source)
+}
+
+fn semicolon_t(source: &str) -> Option<Result<'_, &str>> {
+    token(";", false).parse(source)
+}
+
+fn left_paren_t(source: &str) -> Option<Result<'_, &str>> {
+    token("(", false).parse(source)
+}
+
+fn right_paren_t(source: &str) -> Option<Result<'_, &str>> {
+    token(")", false).parse(source)
+}
+
+fn left_brace_t(source: &str) -> Option<Result<'_, &str>> {
+    token("{", false).parse(source)
+}
+
+fn right_brace_t(source: &str) -> Option<Result<'_, &str>> {
+    token("}", false).parse(source)
+}
+
+fn number_base(source: &str) -> Option<Result<'_, i64>> {
+    let mut end = 0;
+    for (idx, ch) in source.char_indices() {
+        if !ch.is_ascii_digit() {
+            break;
+        }
+
+        end = idx + 1;
     }
 
-    #[test]
-    fn whitespace_no_space() {
-        assert_eq!(whitespace.parse("no space!"), None);
+    if end == 0 {
+        None
+    } else {
+        Some(Result {
+            value: source[0..end].parse().unwrap(),
+            source: &source[end..],
+        })
+    }
+}
+
+fn number(source: &str) -> Option<Result<'_, i64>> {
+    number_base
+        .bind(|tk| ignored.and(Constant::new(tk)))
+        .parse(source)
+}
+
+fn id_base(source: &str) -> Option<Result<'_, &str>> {
+    let mut end = 0;
+    for (idx, ch) in source.char_indices() {
+        if idx == 0 && !ch.is_alphabetic() && ch != '_' {
+            return None;
+        }
+
+        if !ch.is_alphanumeric() && ch != '_' {
+            break;
+        }
+
+        end = idx + ch.len_utf8();
     }
 
-    #[test]
-    fn single_line_comment_empty() {
-        assert_eq!(single_line_comment.parse(""), None);
+    if end == 0 {
+        None
+    } else {
+        Some(Result {
+            value: &source[0..end],
+            source: &source[end..],
+        })
     }
+}
 
-    #[test]
-    fn single_line_comment_single_line() {
-        assert_eq!(
-            single_line_comment.parse("// single line comment"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
+fn id(source: &str) -> Option<Result<'_, &str>> {
+    id_base
+        .bind(|tk| ignored.and(Constant::new(tk)))
+        .parse(source)
+}
 
-    #[test]
-    fn single_line_comment_multiple_lines() {
-        assert_eq!(
-            single_line_comment.parse("// single line comment\nsomething else"),
-            Some(Result {
-                source: "something else",
-                value: ()
-            })
-        );
-    }
+fn not_t(source: &str) -> Option<Result<'_, &str>> {
+    token("!", false).parse(source)
+}
 
-    #[test]
-    fn single_line_comment_no_comment() {
-        assert_eq!(single_line_comment.parse("no comment"), None);
-    }
+fn equal_t(source: &str) -> Option<Result<'_, &str>> {
+    token("==", false).parse(source)
+}
 
-    #[test]
-    fn multi_line_comment_empty() {
-        assert_eq!(multi_line_comment.parse(""), None);
-    }
+fn not_equal_t(source: &str) -> Option<Result<'_, &str>> {
+    token("!=", false).parse(source)
+}
 
-    #[test]
-    fn multi_line_comment_single_line() {
-        assert_eq!(
-            multi_line_comment.parse("/* multi line comment */"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
+fn plus_t(source: &str) -> Option<Result<'_, &str>> {
+    token("+", false).parse(source)
+}
 
-    #[test]
-    fn multi_line_comment_multiple_lines() {
-        assert_eq!(
-            multi_line_comment.parse("/* multi line comment\nsomething else */"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
+fn minus_t(source: &str) -> Option<Result<'_, &str>> {
+    token("-", false).parse(source)
+}
 
-    #[test]
-    fn multi_line_comment_no_comment() {
-        assert_eq!(multi_line_comment.parse("no comment"), None);
-    }
+fn star_t(source: &str) -> Option<Result<'_, &str>> {
+    token("*", false).parse(source)
+}
 
-    #[test]
-    fn multi_line_comment_no_end() {
-        assert_eq!(multi_line_comment.parse("/* multi line comment"), None);
-    }
+fn slash_t(source: &str) -> Option<Result<'_, &str>> {
+    token("/", false).parse(source)
+}
 
-    #[test]
-    fn ignored_empty() {
-        assert_eq!(
-            ignored.parse(""),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
-
-    #[test]
-    fn ignored_whitespace() {
-        assert_eq!(
-            ignored.parse(" \t\n"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
-
-    #[test]
-    fn ignored_comments() {
-        assert_eq!(
-            ignored("// single line comment\n/* multi line comment */"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
-
-    #[test]
-    fn ignored_some() {
-        assert_eq!(
-            ignored(" \t\n  // some comment"),
-            Some(Result {
-                source: "",
-                value: ()
-            })
-        );
-    }
+fn assign_t(source: &str) -> Option<Result<'_, &str>> {
+    token("=", false).parse(source)
 }
